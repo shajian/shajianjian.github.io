@@ -7,6 +7,8 @@ mathjax: true
 
 源码：[ultralytics/yolov5](https://github.com/ultralytics/yolov5.git)
 
+**# 模型结构文件**
+
 有 5 个不同大小的模型，这 5 模型主要就是深度缩放因子和宽度缩放因子不同，影响了模型的深度（layers number）和宽度（channel size）。
 
 以 yolov5l 为例，配置文件为
@@ -59,6 +61,36 @@ head:
   ]
 ```
 
+各个模型文件的深度缩放因子和宽度缩放因子如下：
+
+```sh
+# yolov5x
+depth_multiple: 1.33
+width_multiple: 1.25
+# yolov5l
+depth_multiple: 1.0
+width_multiple: 1.0
+# yolov5m
+depth_multiple: 0.67
+width_multiple: 0.75
+# yolov5s
+depth_multiple: 0.33
+width_multiple: 0.50
+# yolov5n
+depth_multiple: 0.33
+width_multiple: 0.25
+```
+
+根据代码，我们将这两个因子简记为 gd 和 gw，
+
+```python
+gd, gw = d['depth_multiple'], d['width_multiple']
+```
+
+gd 影响的是 block 中 layer 的数量，例如 C3 block 的配置 `[-1, 3, C3, [128]]`，其中 bottleneck layer 的数量是 3，经过 gd 缩放后，变为 `int(gd * 3)` 个 bottleneck layers。如果 block 中 layer 数量为 1， 那么不使用 gd 缩放。
+
+gw 影响 layer 的输出 channel，除最后一个输出 layer（包括 P3/P4/P5） 以外，layer 的输出 channel 需要乘以 gw，并需要保证结果是 8 的整数倍，如不是，向上增大到 8 的整数倍。
+
 # 1. backbone
 
 backbone 是一个 block 列表，例如第一个 block 配置
@@ -85,12 +117,16 @@ backbone 是一个 block 列表，例如第一个 block 配置
 C3 模块由 `3` 个 conv 和 `n` 个 bottleneck 组成。
 
 ```sh
+# 输入输出的 channel
+c2/2             c2/2         c2/2    c2/2
         +-------+    +-------+
 ---+--->| conv -+--->| conv -+---+--->
    |    +-------+    +-------+   ^
    |                             |
    +-----------------------------+      (bottleneck)
 
+# 输入输出的 channel
+c1               c2/2                     c2/2            c2
         +-------+    +----------------+
    +--->| conv -+--->| bottleneck xn -+---+
    |    +-------+    +----------------+   |
@@ -114,13 +150,15 @@ Spatial Pyramid Pooling，以下方配置为例说明，
 SPPF 将输入经过一个 conv，输出记为 `x`，然后 `x` 连续经过 3 个 maxpool（stride=1，所以输出 spatial size 不变），`x` 与 3 个 maxpool 的输出沿 channel 维度 concat，最后经第二个 conv 输出，
 
 ```sh
-    +-------+    +-----+    +-----+    +-----+    +-------+
---->| conv -+-+->| mp -+-+->+ mp -+-+->| mp -+--->|       |
-    +-------+ |  +-----+ |  +-----+ |  +-----+    | conv -+--->
-              |          |          +------------>|       |
-              |          +----------------------->|       |
-              +---------------------------------->|       |
-                                                  +-------+     (SPPF)
+# 输入输出 channel
+c1          c2/2        c2/2      c2/2       c2/2   c2*2        c2
+    +-------+    +-----+    +-----+    +-----+        +-------+
+--->| conv -+-+->| mp -+-+->+ mp -+-+->| mp -+------->|       |
+    +-------+ |  +-----+ |  +-----+ |  +-----+        | conv -+--->
+              |          |          +---------------->|       |
+              |          +--------------------------->|       |
+              +-------------------------------------->|       |
+                                                      +-------+     (SPPF)
 ```
 
 **# 下采样率**
@@ -151,11 +189,11 @@ head 子网络中各 block/layer 与 backbone 中类似处理。
 
 整个模型结构如下图所示，
 
-![](/images/obj_det/yolov5_1.png)
+![](/images/obj_det/yolov5_1.jpg)
 
 <center>图 1. yolov5 结构图</center>
 
-图 1 中，`x32` 表示下采样率为 `32` ，最终送入 `Detect` 的特征相对于原始输入 size，下采样率为 `32` 。
+图 1 中，`conv-2` 中的 `2` 表示下采样率为 2， `x32` 表示下采样率为 `32` ，最终送入 `Detect` 的特征相对于原始输入 size，下采样率为 `32`，最左一列对应 backbone 结构。
 
 
 **# Detect**
@@ -169,14 +207,21 @@ head 子网络中各 block/layer 与 backbone 中类似处理。
 
 根据图 1，可知三个 layer 的输出特征 spatial size 分别为 $(H _ 0/8, W _ 0 / 8)$、$(H _ 0/16, W _ 0 / 16)$、$(H _ 0/32, W _ 0 / 32)$，其中 $(H _ 0, W _ 0)$ 是网络输入 size 。三个特征的 channel size 分别是 `256, 512, 1024` 。
 
+**# 锚框**
+
 三个特征平面各自预测，由于特征平面 scale 不同，所以每个 scale 使用各自的一组 anchors，
 
 ```sh
+# 各个特征平面上的 anchor 尺寸，[w1, h1, w2, h2, w3, h3]
 anchors:
   - [10,13, 16,30, 33,23]  # P3/8
   - [30,61, 62,45, 59,119]  # P4/16
   - [116,90, 156,198, 373,326]  # P5/32
 ```
+
+需要注意的是，以上 anchor 的 size 基于输入图片，在训练时，需要将 anchor size 映射到相应的特征平面上。例如模型输入 size 为 (640, 640)，那么 P3 特征平面 size 为 (80, 80)，整体 stride=8，P3 的第三种 anchor (w=33, h=23) 映射到 P3 特征平面上则为 (33.0/8, 23.0/8)（保持浮点数类型），下文在计算损失时也会讲到。
+
+**# Detect 的输出 channel**
 
 每个 location 处预测 3 个 anchor boxes，每个 anchor box 预测 `C+5` 的数据，分别为 `C` 个分类得分，`4` 个坐标以及 `1` 个 IOU 置信度，所以需要使用 `1x1` 卷积先将特征 channel size 转为 `3*(C+5)` ，故 Detect 输出为三个 scale 的预测值，shape 为
 
@@ -184,6 +229,16 @@ anchors:
 (3*(C+5), H0/8, W0/8)
 (3*(C+5), H0/16, W0/16)
 (3*(C+5), H0/32, W0/32)
+```
+
+Detect 在 train 模式下的输出为一个具有 3 个 tensor 的 list，tensor 的 shape 分别为 
+
+```sh
+# b 为 batch size，3 表示每个 location 预测 3 个不同size的 anchors，
+# C 为分类数量，5 表示 xywh 和置信度，H0 W0 表示模型的输入 size。
+[b, 3, H0/8, W0/8, C+5]
+[b, 3, H0/16, W0/16, C+5]
+[b, 3, H0/32, W0/32, C+5]
 ```
 
 # 3. 预处理
@@ -273,12 +328,12 @@ torch.stack(im, 0), torch.cat(label, 0)
 
 # 4. 损失
 
-构建检测模型时，anchors 的 size 根据特征 scale 做了相应的调整，
+构建检测模型时，anchors 的 size 根据特征 scale 做了相应的调整，即，每个 anchor 在相应的特征平面上的 size，
 
 ```python
 # 位于 DetectionModel 初始化函数中
-m.anchors /= m.stride.view(-1, 1, 1)
-
+m.anchors /= m.stride.view(-1, 1, 1)  # shape: (nl=3, na=3, 2)
+# anchor size / stride
 # [10,13, 16,30, 33,23] / 8
 # [30,61, 62,45, 59,119] / 16
 # [116,90, 156,198, 373,326] / 32
@@ -287,26 +342,34 @@ m.anchors /= m.stride.view(-1, 1, 1)
 计算损失的类函数为 `ComputeLoss`，输入为
 
 ```sh
-# p 是三个 scale feature maps 的预测结果，每个 location 有 3 个 anchors，每个 anchor 预测 C+5 个数据
-p: [(B,3, H/8, W/8, C+5), (B,3, H/16, W/16, C+5), (B,3, H/32, W/32, C+5)]
+# pred 是三个 scale feature maps 的预测结果，每个 location 有 3 个 anchors，每个 anchor 预测 C+5 个数据
+pred: [(B,3, H/8, W/8, C+5), (B,3, H/16, W/16, C+5), (B,3, H/32, W/32, C+5)]
 
 # N 为 batch images 中所有目标总数。第一列记录目标所示 image index。第二列为 cls_id，后 4 列为归一化 x,y,w,h
 targets: (N, 6)
 ```
 
-每个 scale 的特征使用对应 scale 的 3 组 anchors。例如第一个特征：
+相关代码为，
+
+```python
+pred = model(imgs)
+loss, loss_items = compute_loss(pred, targets.to(device))
+```
+
+
+每个 scale 的特征使用对应 scale 的 3 个 anchors 进行监督。例如第一个特征 P3：
 
 1. 其 anchors size 为
 
     ```sh
-    [10/8, 13/8,  16/8, 30/8,  33/8, 23/8]  # W H of anchors, based on the feature
+    [[10/8, 13/8],  [16/8, 30/8],  [33/8, 23/8]]  # W H of anchors, based on the feature
     ```
 
 2. 所有 gt boxes resized 到基于特征 size
 
     $$w = w _ n * W/8, \quad h = h _ n * H/8$$
 
-    其中 $w _ n$ 是 gt box 归一化宽度
+    其中 $w _ n, h_n$ 是 gt box 归一化宽度和高度，$W, H$ 是模型输入 size，8 是 P3 特征的 stride，$w, h$ 是 anchor box 在特征平面上的 size。
 
 > 以下内容来自 https://mmyolo.readthedocs.io/zh_CN/latest/recommended_topics/algorithm_descriptions/yolov5_description.html
 
@@ -334,7 +397,7 @@ yolov3 中，损失有 3 项：
 
 1. 分类损失：**正例** 分类损失之和
   
-    **正例** 的分类损失，target 为 `1`，预测为 `C` 长度向量，使用 target 所属分类 `c` 处的预测得分，计算这个得分与 `1` 的差的平方
+    **正例** 的分类损失，target 为 `1`（one hot 向量），预测为 `C` 长度向量，使用 target 所属分类 `c` 处的预测得分，计算这个得分与 `1` 的差的平方
 
 2. 坐标损失：**正例** 的坐标损失之和
 
@@ -342,7 +405,7 @@ yolov3 中，损失有 3 项：
 
 3. 置信度损失：**正例** 置信度和 **负例** 置信度加权和
 
-    计算 anchor boxes（M 个） 与 gt boxes（N 个）的 IOU 矩阵，shape 为 $(M, N)$，每列求最大值，最大值所在的行 index 所对应的 anchor box 就是 **正例** 。（正例也有使用 pred boxes 与 gt boxes 计算出 $(M, N)$，然后类似处理，得到哪些位置第几个预测为正例）
+    **正例：** 计算 anchor boxes（M 个） 与 gt boxes（N 个）的 IOU 矩阵，shape 为 $(M, N)$，每列求最大值，最大值所在的行 index 所对应的 anchor box 就是 **正例** 。（正例也有使用 pred boxes 与 gt boxes 计算出 $(M, N)$，然后类似处理，得到哪些位置第几个预测为正例）
 
     **负例** ： 除去上述 **正例** 的所有其他 anchor boxes 均为负例。当然，还有一种处理是，计算 pred boxes 与 gt boxes 的 IOU 矩阵，shape 也是 $(M, N)$，按行求最大值，找出每行最大 IOU > 0.5 的行，这些行不作为负例，即，从前述负例中去掉这些行。
 
@@ -353,7 +416,7 @@ yolov3 中，损失有 3 项：
 
 回归公式从 (1) 改为 (2)，有什么好处？ 
 
-1. 中心点坐标偏差（offset）范围从 `(0, 1)` 变成 `(-0.5, 1.5)` ，如图 3 所示，在 `0` 点附近更陡（毕竟斜率变成 2 倍），更能精确的预测目标中心坐标，注意 `-0.5` 这个 bias，是为了确保 `0` 点偏差值固定在 `0.5` 不变。
+1. 中心点坐标偏差（offset: $b_x - c_x$）范围从 `(0, 1)` 变成 `(-0.5, 1.5)` ，如图 3 所示，在 `0` 点附近更陡（毕竟斜率变成 2 倍），更能精确的预测目标中心坐标，注意 `-0.5` 这个 bias，是为了确保 `0` 点（$t_x=0$ 位置处）偏差值固定在 `0.5` 不变。
 
     ![](/images/obj_det/yolov5_3.png)
 
@@ -379,23 +442,27 @@ yolov3 中使用最大 IOU 确定正例 。yolov5 使用 shape match 确定正�
 
 **shape 比例 比较**
 
-记下标 gt 表示 gt box，下标 pt 表示 pred box（or anchor box？），
+记下标 gt 表示 gt box，下标 pt 表示 pred box（or anchor box？），按以下流程匹配：
 
 $$\begin{aligned} r _ w &= w _ {gt} / w _ {pt}
 \\\\  r _ h &= h _ {gt} / h _ {pt}
 \\\\ r _ w ^ m &= \max (r _ w , 1 / r _ w )
 \\\\ r _ h ^ m &= \max (r _ h, 1/ r _ h)
 \\\\ r ^ m &= \max (r _ w ^ m, r _ h ^ m)
-\\\\ \text{if} \ r ^ m & < \text{prior\_match\_thr: match!}
+\\\\ \text{if} \ r ^ m & < \text{prior\_match\_thr: match}
 \end{aligned} \tag{3}$$
 
-其中 `prior_match_thr` 是一个预先设置的比例阈值，可取值 `4` 。(3) 式表示 $r _ w ^ m < 4 \ \& \ r _ h ^ m < 4$，以宽度比为例，
+其中 `prior_match_thr` 是一个预先设置的比例阈值，可取值 `4` 。(3) 式表示 $r _ w ^ m < 4$ 并且 $r _ h ^ m < 4$，以宽度比为例，
 
-$$r _ w < 4 \ \& \ 1/r _ w < 4 \Rightarrow \frac 1 4 < r _ w < 4$$
+$$r _ w < 4 \ , \ 1/r _ w < 4 \Rightarrow \frac 1 4 < r _ w < 4$$
 
-(3) 式中是 gt box 与 pred box 宽度比还是 pred box 与 gt box 宽度比，其实无所谓，因为对称，所以 $1/4 < 1/ r _ w < 4$ ，比例范围仍是 $(1/4, 4)$ 。**结论** 就是，pred box 与 gt box 边长比例在 $(1/4, 4)$ 范围内的则是正例。
+(3) 式中是 gt box 与 pred box 宽度比还是 pred box 与 gt box 宽度比，其实无所谓，因为对称，所以 $1/4 < 1/ r _ w < 4$ ，比例范围仍是 $(1/4, 4)$ 。**结论** 就是，
 
-前面根据 (2) 式可知，我们预测的比例范围为 $(0, 4)$，这两个范围就比较接近，当然了，我们也可以将 (2) 式中 $\sigma (t _ w)$ 前面的系数 `2` 改成其他值，也可以调整 `prior_match_thr` 阈值，一切都根据实际任务情况做调整，但无论这两个值如何调整，预测的比例范围必须要真包含正例的比例范围，$R _ {pred} \subsetneq R _ {pos}$
+**pred box 与 gt box 边长比例均在 $(1/4, 4)$ 范围内的则是正例。**
+
+例如：anchor box 为 (10,13)，一个 gt box 为 (20, 24)，显然宽比和高比均在 $(1/4, 4)$ 范围内，那么两者匹配，如果 gt box 为 (60, 40)，那么高比在这个范围内，而宽比不在这个范围内，所以不匹配。
+
+前面根据 (2) 式可知，我们预测的 size 比例范围为 $(0, 4)$，这两个范围就比较接近，当然了，我们也可以将 (2) 式中 $\sigma (t _ w)$ 前面的系数 `2` 改成其他值，也可以调整 `prior_match_thr` 阈值，一切都根据实际任务情况做调整。
 
 
 **正例 location 确定**
@@ -421,7 +488,7 @@ yolov3 中，gt box 中心落于哪个 location，那么这个 location 上 B �
 
 需要注意，对于图 6 的左边 4 种考虑邻域 cell 的情况，不要忘了一个前提条件：
 
-1. 图 6 左边起第一个子图，当 $i \ge 1$ 时才能利用其左侧的 `(i-1,j)` cell ，即 gt box 中心点的 x 坐标 $x _ {gt} \ge 1.0$ 且 $x _ {gt} \% 1 < 0.5$ 。$i$ 与 $x _ {gt}$ 的关系满足 $\lfloor x _ {gt} \rfloor = i$ 。
+1. 图 6 左边起第一个子图，当 $i \ge 1$ 时才能利用其左侧的 `(i-1,j)` cell ，即 gt box 中心点的 x 坐标 $x _ {gt} \ge 1.0$ 且 $x _ {gt} \\% 1 < 0.5$ 。$i$ 与 $x _ {gt}$ 的关系满足 $\lfloor x _ {gt} \rfloor = i$ 。
 
 2. 其他情况的前提条件类似。
 

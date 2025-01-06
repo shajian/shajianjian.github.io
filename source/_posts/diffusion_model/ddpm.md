@@ -103,7 +103,7 @@ $$\begin{aligned}p(\mathbf x_0)&=\int p(\mathbf x_{0:T}) d \mathbf x_{1:T}
 \\\\ &=\int p(\mathbf x_{0:T}) \frac {q(\mathbf x_{1:T}|\mathbf x_0)}{q(\mathbf x_{1:T}|\mathbf x_0)} d \mathbf x_{1:T}
 \end{aligned} \tag{5}$$
 
-$$\begin{aligned}\mathbb E[-\log p(\mathbf x_0)]&=-\int q(\mathbf x_0) \log p(\mathbf x_0) d\mathbf x_0
+$$\begin{aligned}\mathbb E_q[-\log p(\mathbf x_0)]&=-\int q(\mathbf x_0) \log p(\mathbf x_0) d\mathbf x_0
 \\\\ &= -\int d\mathbf x_0 q(\mathbf x_0) \log \left[\int q(\mathbf x_{1:T}|\mathbf x_0) d \mathbf x_{1:T} \frac {p(\mathbf x_{0:T})}{q(\mathbf x_{1:T}|\mathbf x_0)}\right]
 \end{aligned} \tag{6}$$
 
@@ -113,7 +113,7 @@ $$\log [\cdot] \ge \int q(\mathbf x_{1:T}|\mathbf x_0) d \mathbf x_{1:T} \cdot \
 
 将 (7) 式代入 (6) 式，得
 
-$$\mathbb E[-\log p(\mathbf x_0)] \le -\int d \mathbf x_{0:T} q(\mathbf x_{0:T}) \cdot \log \frac {p(\mathbf x_{0:T})}{q(\mathbf x_{1:T}|\mathbf x_0)}=\mathbb E_q \left[-\log \frac {p(\mathbf x_{0:T})}{q(\mathbf x_{1:T}|\mathbf x_0)}\right]:=L \tag{8}$$
+$$\mathbb E_q[-\log p(\mathbf x_0)] \le -\int d \mathbf x_{0:T} q(\mathbf x_{0:T}) \cdot \log \frac {p(\mathbf x_{0:T})}{q(\mathbf x_{1:T}|\mathbf x_0)}=\mathbb E_q \left[-\log \frac {p(\mathbf x_{0:T})}{q(\mathbf x_{1:T}|\mathbf x_0)}\right]:=L \tag{8}$$
 
 (8) 式就是训练目标，即 **最小化 $L$** 。(8) 式中 $L$ 是 **针对联合概率密度 $q(\mathbf x_{0:T})$ 求期望** 。 
 

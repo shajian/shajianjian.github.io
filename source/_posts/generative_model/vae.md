@@ -71,11 +71,17 @@ $$p_{\theta}(\mathbf z|\mathbf x)=\frac {p _ {\theta}(\mathbf x, \mathbf z)}{\in
 
 分母中积分不可解析处理，故使用变分近似  $q_{\phi}(\mathbf z|\mathbf x)$ 。
 
+我们的目的是根据一组观测值 $\mathbf X=\{\mathbf x _ i\} _ {i=1} ^ n$，求得后验分布 $p_{\theta}(\mathbf z|\mathbf x)$，然后根据这个后验分布，随机取 $\mathbf z$ 的一个值，就可以通过解码器生成一个新的观测值 $\mathbf x$，这在图像生成等任务有用。
+
+假设 $\mathbf z$ 是一个 n 维高斯分布，那么 $\mathbf z$ 的分布由期望向量和协方差矩阵确定，为了简单期间，假设协方差是一个对角矩阵，那么一共有 2n 个参数，根据一组观测值，训练 encoder 和 decoder，encoder 的输出就是这 2n 个参数，decoder 的输出为 $\mathbf x$ 的一个取值。当训练完成后，我们可以直接根据这 2n 个参数，生成一个 $\mathbf z$，然后通过 decoder 得到一个新的 $\mathbf x$ 。
+
 ## 2.2 变分边界
 
 数据集对数似然为 $\log p_{\theta}(X)=\sum_{i} \log p_{\theta}(\mathbf x^{(i)})$，其中
 
 $$\log p_{\theta}(\mathbf x ^ {(i)})=D_{KL}(q_{\phi}(\mathbf z|\mathbf x ^ {(i)})|| p_{\theta}(\mathbf z|\mathbf x^{(i)})) + \mathcal L(\theta, \phi; \mathbf x ^ {(i)}) \tag{1}$$
+
+(1) 式中，想要让似然函数最大，由于 $D_{KL}(\cdot || \cdot) \ge 0$，所以需要令 $\mathcal L(\theta, \phi; \mathbf x ^ {(i)})$ 尽可能地大，$\mathcal L(\theta, \phi; \mathbf x ^ {(i)})$ 称为变分下界。
 
 **证明：**
 
@@ -123,7 +129,9 @@ $$\mathcal L(\theta,\phi) = -D _ {KL}(q(x,z)||p(x,z)) + \mathbb E _ {q(x)} [\log
 
 由于 $D _ {KL}(\cdot) \ge 0$，所以根据 (1) 式可知 $\log p _ {\theta}(\mathbf x) \ge \mathcal L(\theta, \phi; \mathbf x)$ ，即 **对数似然的下限是 $\mathcal L(\theta, \phi; \mathbf x)$** ，所以我们的 **目标是最大化 $\mathcal L(\theta, \phi; \mathbf x)$ ，从而达到最大化对数似然的目的** 。
 
-但是求目标 $\mathcal L(\theta, \phi; \mathbf x)$  的导数存在问题，因为表达式中含有期望计算 $\mathbb E_{q_{\phi}(\mathbf z|\mathbf x)}[\cdot]$，这使得导数计算不好处理。一种常见的方法是使用 Monte Carlo 梯度估计方法：
+如果能求得 $\mathcal L(\theta, \phi; \mathbf x)$ ，自然能计算出 $\mathcal L(\theta,\phi)$，方法是：对训练集中每个样本计算 $\mathcal L(\theta, \phi; \mathbf x)$，然后求平均，就是 $\mathbb E _ {q(x)}[\mathcal L(\theta, \phi; \mathbf x)]$ 。
+
+但是求最大化目标 $\mathcal L(\theta, \phi; \mathbf x)$ 存在问题，因为表达式中含有期望计算 $\mathbb E_{q_{\phi}(\mathbf z|\mathbf x)}[\cdot]$（见 (3) 式），这使得导数计算不好处理。一种常见的解决方法是使用 Monte Carlo 梯度估计方法：
 
 
 $$\mathcal F(\theta,\phi)=\mathbb E _ {q _ {\phi}(\mathbf z)}[f(\mathbf z;\theta,\phi)] \approx \frac 1 L \sum_{l=1} ^ L f(\mathbf z ^ {(l)};\theta,\phi) \tag{4}$$
@@ -144,18 +152,18 @@ $\mathbf z$ 是一个随机变量，参数 $\phi$ 包含在节点 $\mathbf z$ �
 
 $$\mathbf z = g_{\phi}(\epsilon, \mathbf x) \tag{5}$$
 
-其中 $\epsilon \sim p(\epsilon)$ 是一个随机噪声向量，$g_{\phi}(\cdot)$ 是某个参数为 $\phi$ 的向量函数。由于 (5) 式是确定性函数，那么
+其中 $\epsilon \sim p(\epsilon)$ 是一个随机噪声向量，$g_{\phi}(\cdot)$ 是某个参数为 $\phi$ 的向量函数。由于 (5) 式是确定性函数，可求导，那么
 
 $$q_{\phi}(\mathbf z|\mathbf x) d \mathbf z=p(\epsilon) d\epsilon
 \\\\ \int q_{\phi}(\mathbf z|\mathbf x) f(\mathbf z) d\mathbf z=\int p(\epsilon) f(\mathbf z) d\epsilon=\int p(\epsilon) f(g_{\phi}(\epsilon, \mathbf x)) d\epsilon$$
 
-（注：为了简洁，$f(\mathbf z)$ 中未注明参数）
+（注：为了简洁，$f(\mathbf z)$ 中未注明参数）。
 
 那么 Monte Carlo 估计为
 
 $$\mathbb E_{q_{\phi}(\mathbf z|\mathbf x)}[f(\mathbf z)]=\int q_{\phi}(\mathbf z|\mathbf x) f(\mathbf z) d\mathbf z \approx \frac 1 L \sum_{l=1}^L f(g_{\phi}(\mathbf x, \epsilon^{(l)})) \tag{6}$$
 
-其中 $\epsilon^{(l)} \sim p(\epsilon)$ 。
+其中 $\epsilon^{(l)} \sim p(\epsilon)$ ，一共 L 次采样。
 
 以一维高斯分布为例， $z \sim p(z|x)=\mathcal N(\mu, \sigma^2)$，那么一种重参数表达为 $z = \mu + \sigma \epsilon$，其中 $\epsilon \sim \mathcal N(0, 1)$，那么目标函数为
 
@@ -172,7 +180,7 @@ $$\tilde {\mathcal L}(\theta, \phi;\mathbf x)=\frac 1 L \sum_{l=1}^L \log p_{\th
 ---
 算法 1 Auto-Encoding VB (AEVB)
 
-输入：mini batch size $M=100$。采样次数 $L=1$
+输入：mini batch size $M=100$。Monte Carlo 近似的采样次数 $L=1$
 输出：encoder/decoder 参数 $\phi, \theta$
 初始化：$\phi, \theta$
 
@@ -253,7 +261,7 @@ $$\begin{aligned}-D_{KL}(q_{\phi}(\mathbf z|\mathbf x)||p_{\theta}(\mathbf z))&=
 
 令隐变量 $\mathbf z$ 的先验为各向同性的多维高斯分布 $p_{\theta}(\mathbf z)=\mathcal N(\mathbf z;0, I)$ ，此先验分布不包含参数。
 
-似然分布 $p_{\theta}(\mathbf x|\mathbf z)$ 是一个多维高斯分布（连续型数据）或者 Bernoulli 分布（二分类数据），对应 decoder 模型，似然分布的参数则由 decoder 模型输出确定。decoder 模型采样 MLP 结构，
+似然分布 $p_{\theta}(\mathbf x|\mathbf z)$ 是一个多维高斯分布（连续型数据）或者 Bernoulli 分布（二分类数据），对应 decoder 模型，似然分布的参数则由 decoder 模型输出确定。decoder 模型采用 MLP 结构，
 
 真实后验 $p_{\theta}(\mathbf z|\mathbf x)$ 使用高斯型分布，其协方差矩阵使用一个对角矩阵作为近似（这里这么假设是为了使问题简化），那么变分后验近似则为
 
@@ -270,7 +278,7 @@ MLP 包含单个 hidden layer，输入为 $\mathbf z$，多元 Bernoulli 概率�
 
 $$\log p(\mathbf x|\mathbf z)=\sum_{i=1}^D x_i [\log y_i + (1-x_i) \cdot \log (1-y_i)] \tag{9}$$
 
-其中 $\mathbf y= f_{\sigma} (W_2 \tanh (W_1 \mathbf z+ \mathbf b_1)+\mathbf b_2)$，$\mathbf z \in \mathbb R^J, \ \mathbf x \in \mathbb R^D$ 。
+其中 $\mathbf y= f_{\sigma} (W_2 \tanh (W_1 \mathbf z+ \mathbf b_1)+\mathbf b_2)$，$\mathbf z \in \mathbb R^J, \ \mathbf x \in \mathbb R^D$ ，这是一个二层 layers 的网络 MLP，(9) 式中的 $\mathbf x$ 就是输入。
 
 decoder 输出为 $p_{\theta}(\mathbf x|\mathbf z)$ 的分布参数，这里是多元 Bernoulli 分布，那么输出 $\mathbf y \in \mathbb R^D$ 表示 $\mathbf x=\mathbf 1$ 的概率向量。 
 
@@ -280,6 +288,8 @@ $f_{\sigma}(\cdot)$ 表示 sigmoid 激活函数，$(W_1,W_2, \mathbf b_1, \mathb
 
 高斯 MLP 既可以做 encoder，也可以做 decoder，即我们的例子中隐变量 $\mathbf z$ 是连续型的，$\mathbf x$ 可以是连续型（高斯MLP）也可以是离散型（Bernoulli MLP）。
 
+**# decoder**
+
 我们假设了高斯分布的协方差矩阵是对角型，表示 decoder 时，MLP 网络表达为
 
 $$\begin{aligned}\mathbf h &= \tanh (W_3 \mathbf z + \mathbf b_3)
@@ -287,9 +297,13 @@ $$\begin{aligned}\mathbf h &= \tanh (W_3 \mathbf z + \mathbf b_3)
 \\\\ \log \sigma^2 &= W_5 \mathbf h + \mathbf b_5
 \end{aligned} \tag{10}$$
 
-此 MLP 作为 decoder 时，对数似然分布为 $\log p(\mathbf x|\mathbf z)= \log \mathcal N(\mathbf x;\mu, \sigma^2)$ 。
+根据 (10) 式，可以计算出对数似然分布为 
 
-此 MLP 作为 encoder 时，对数变分分布为 $\log q_{\phi}(\mathbf z|\mathbf x)= \log \mathcal N(\mathbf z;\mu, \sigma^2)$ ，且 (10) 式中 $\mathbf z$ 改为 $\mathbf x$ 。
+$$\log p(\mathbf x|\mathbf z)= \log \mathcal N(\mathbf x;\mu, \sigma^2) \tag{10-1}$$
+
+**# encoder**
+
+当此 MLP 作为 encoder 时，对数变分分布为 $\log q_{\phi}(\mathbf z|\mathbf x)= \log \mathcal N(\mathbf z;\mu, \sigma^2)$ ，将 (10) 式中 $\mathbf z$ 改为 $\mathbf x$ 就得到此 encoder 的网络结构。
 
 在我们的例子中，从变分分布 $\mathbf z^{(i,l)} \sim q_{\phi}(\mathbf z|\mathbf x ^ {(i)})$ 中采样，根据等式 $\mathbf z ^ {(i,l)}=g _ {\phi}(\mathbf x ^ {(i)}, \epsilon ^ {l})=\mu ^ {(i)} + \sigma ^ {(i)} \odot \epsilon ^ {(l)}$，其中 $\epsilon ^ {(l)} \sim \mathcal N(0,I)$，$\mu ^ {(i)}, \sigma ^ {(i)}$ 是 $encoder(\mathbf x ^ {(i)})$ 的输出。
 
@@ -297,7 +311,9 @@ $p _ {\theta}(\mathbf z)$ 和 $q _ {\phi}(\mathbf z|\mathbf x)$ 均为高斯分�
 
 $$\mathcal L(\theta,\phi;\mathbf x)=\frac 1 2 \sum_{j=1} ^ J (1+ \log \sigma_j ^ 2 - \mu_j ^ 2 -\sigma_j ^ 2) + \frac 1 L \sum_{l=1} ^ L \log p_{\theta}(\mathbf x|\mathbf z ^ {(l)}) \tag{11}$$
 
-其中 $\mathbf z ^ {(i,l)}=\mu ^ {(i)} + \sigma ^ {(i)} \odot \epsilon ^ {(l)}$，$\epsilon ^ {(l)} \sim \mathcal N(0,I)$ 。
+其中 $\mathbf z ^ {(i,l)}=\mu ^ {(i)} + \sigma ^ {(i)} \odot \epsilon ^ {(l)}$，$\epsilon ^ {(l)} \sim \mathcal N(0,I)$。
+
+计算 (11) 式时，$\epsilon ^ {(l)} \sim \mathcal N(0,I)$，$\mu ^ {(i)}, \sigma ^ {(i)}$ 是 $encoder(\mathbf x ^ {(i)})$ 的输出，(11) 式第一项容易计算，(11) 式第二项则可以根据 (9) 式或者 (10-1) 式计算。
 
 例如使用 mnist 数据集训练，
 
@@ -314,11 +330,13 @@ $$\mathcal L(\theta,\phi;\mathbf x)=\frac 1 2 \sum_{j=1} ^ J (1+ \log \sigma_j ^
 
 说明：`hidden_dim` 可以取 256，`latent_dim` 可以取 2（或者其他更大的数），`2*latent_dim` 表示两个输出，分别对应 $q_{\phi}(\mathbf z|\mathbf x)$ 的期望和协方差对角线向量。
 
-(11) 式中最后一项为（L=1）
+decoder 如果是高斯 MLP，那么 (11) 式中最后一项为（L=1）
 
 $$\log p_{\theta}(\mathbf x|\mathbf z)=\log \mathcal N(\mathbf x;\mu, \sigma ^ 2)=-\sum_{i=1} ^ D \frac 1 {2\sigma_i ^ 2}(x_i - \mu_i) ^ 2+C \tag{12}$$
 
-其中 $C$ 是与模型参数无关的常量，$D=784$（mnist 数据集），或者使用交叉熵作为损失函数，
+其中 $C$ 是与模型参数无关的常量，$D=784$（mnist 数据集）。
+
+或者使用交叉熵作为损失函数，
 
 $$-p\log q=-[x_i \log \mu_i + (1-x_i) \log (1-\mu_i)] \tag{13}$$
 
@@ -348,6 +366,56 @@ vae_loss = K.mean(xent_loss + kl_loss)
 采样随机变量 $\mathbf z \sim \mathcal N(0, I)$，$\mathbf z$ 的 shape 为 $(1,2)$，其中 1 表示只生成一个图像，2 就是 latent_dim 的值。然后按照 表 1 中 decoder 的 layer 变换，得到像素值位于 $(0,1)$ 内的图像，乘以 255 后取整，然后 clip 到 $[0,255]$。
 
 
+# 4. 代码
+
+给一个 pytorch 实现的 vae 代码。
+
+```python
+class VAE(nn.Module):
+    def __init__(self):
+        super(VAE, self).__init__()
+        # encoder
+        self.fc1 = nn.Linear(784, 200)  
+        self.fc2_mu = nn.Linear(200, 10)    # mu of z
+        self.fc2_log_std = nn.Linear(200, 10)   # log std of z
+        # decoder
+        self.fc3 = nn.Linear(10, 200)
+        self.fc4 = nn.Linear(200, 784)
+
+    def encode(self, x):
+        h1 = F.relu(self.fc1(x))
+        mu = self.fc2_mu(h1)
+        log_std = self.fc2_log_std(h1)
+        return mu, log_std
+
+    def decode(self, z):
+        h3 = F.relu(self.fc3(z))
+        recon = torch.sigmoid(self.fc4(h3)) # 重建
+        return recon
+
+    def reparametrize(self, mu, log_std):
+        '''
+        sample to get a value of z
+        '''
+        std = torch.exp(log_std)
+        eps = torch.randn_like(std)
+        z = mu + eps * std
+
+    def forward(self, x):
+        mu, log_std = self.encode(x)
+        z = self.reparametrize(mu, log_std)
+        recon = self.decode(z)
+        return recon, mu, log_std
+
+    def loss_function(self, recon, x, mu, log_std):
+        # 对应 (11) 式的第二项
+        recon_loss = F.mse_loss(recon, x, reduction='sum')
+        # 对应 (11) 式的第一项
+        kl_loss = -0.5 * (1 + 2 * log_std - mu.pow(2) - torch.exp(2 * log_std))
+        kl_loss = torch.sum(kl_loss)
+        loss = recon_loss + kl_loss
+        return loss
+```
 
 # ref
 

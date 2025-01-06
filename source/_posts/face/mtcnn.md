@@ -128,9 +128,84 @@ $\beta _ i ^ j \in \{0, 1\}$ 是样本类型指示器。
 
     从 WIDER FACE 数据集的图片中随机 crop 若干 patches，得到正负样本和 part face。从 CelebA 数据集中 crop faces 作为 landmark face。
 
-2. R-Net
+    - 负样本。 在范围 `[12, min(im_h, im_w)/2)` 中随机选择 size，然后随机选择 crop 区域的左上角。计算这个 crop box 与图像中所有 gt boxes 的 IoUs，如果均小于 0.3，那么这个 crop box 为负样本，但是需要将 crop box resize 到 (12, 12) 。
+
+    - 正例周围的负样本（难样本）。在每个 gt box 附近随机 crop 5 个 boxes。gt box 的 size 必须大于 20，否则太小不使用。在 [12, min(im_h, im_w)/2] 范围中随机选择 crop size。记 gt box 坐标为 (x1, y1, w, h)，那么在范围 `[max(-size, -x1), w)` 中随机选择一个值，作为 x1 的偏差值，即 crop box 的 left 与 gt box left 的偏差，这个范围左侧值保证了 crop box 的 left 值 > 0，范围右侧值保证了 crop box left < gt box right，y1 的偏差也是如此，这样就保证了 crop box 与 gt box 有交叠 intersection，从而 IOU > 0。计算这个 crop box 与所有 gt boxes 的 IoUs，如果最大 IoU < 0.3，那么 crop box 为负样本，同样需要 resize 到 (12, 12)。
+
+    - 正样本/part face。在范围 `[min(w, h) * 0.8, 1.25*max(w, h))` 范围中随机取值作为 crop size，这里 w 和 h 是当前 gt box 的 size，这个范围保证了 crop size 比较接近 gt box size。crop center 与 gt box center 的偏差则分别为 w 和 h 的 0.2 倍内上下浮动。计算 crop box 与当前 box 的 IoU，如果 >= 0.65，则是正样本，如果 >= 0.4，则是 part face。这里没有计算 crop box 与所有 gt boxes 的 IoUs，因为会遍历每一个 gt box ，通过此方法寻找相应的正样本和 part face，所以对每个当前 gt box，我们只要寻找这个 gt box 的正样本和 part face 即可，故只要求 crop box 与当前 gt box 的 IoU，判断随机 crop box 是否是当前 gt box 的正样本/part face，如果是，那么 target 为：
+
+        ```python
+        delta_x = npr.randint(-w * 0.2, w * 0.2)    # 中心 x 坐标偏差
+        delta_y = npr.randint(-h * 0.2, h * 0.2)
+
+        # x1+w/2： gt box 中心 x 坐标
+        # x1+w/2+delta_x: crop box 中心 x 坐标
+        nx1 = int(max(x1 + w / 2 + delta_x - size / 2, 0))  # crop box left
+        ny1 = int(max(y1 + h / 2 + delta_y - size / 2, 0))  # crop box top
+        nx2 = nx1 + size    # crop box right
+        ny2 = ny1 + size    # crop box bottom
+        # target：
+        offset_x1 = (x1 - nx1) / float(size)
+        offset_y1 = (y1 - ny1) / float(size)
+        offset_x2 = (x2 - nx2) / float(size)
+        offset_y2 = (y2 - ny2) / float(size)
+        ```
+
+        left top right bottom 偏差除以 size，以相对值作为 target，因为训练阶段，crop image 需要 resize 到 (12, 12)，但是这个偏差比例不变，用作 target 是合适的。
+
+        注意：gt box 图像没有直接作为正样本（其实是可以作为正样本的，不知道为啥没有使用）
+
+    - landmark 训练数据的准备。标注数据的格式为，
+
+        ```sh
+        # 图像文件路径  人脸 gt box 坐标    5 个 landmarks 坐标
+        im_path left right top bottom x1 y1 x2 y2 x3 y3 x4 y4 x5 y5
+        ```
+        根据人脸 gt box 坐标 crop 出人脸图像，然后 landmarks 坐标归一化如下，然后作为 landmark 任务的 target：
+        
+        ```python
+        rx = (x1 - left) / (right - left)
+        ry = (y1 - top) / (bottom - top)
+        ```
+
+        人脸需要 resize 到 (12, 12)，target 是比例，其值不再需要调整。landmark 数据增强：在 gt box 附近随机 crop 一个大小差不多的区域，然后计算 crop box 与 gt box 的 IoU，如果 > 0.65，那么这个 crop box 也作为一个正样本，按上式计算 landmark 坐标到 crop box 边缘的偏差相对值作为 target，然后 crop box 图像需要 resize 到 (12, 12)。然后分别按 0.5 的概率对 crop box 图像进行其他增强：镜像、旋转、逆时针旋转。
+
+        - 镜像，将 crop image 左右翻转，target 值则变成 (1-target) 。
+        - 旋转。将原图 im 绕 crop 图像的中心旋转 5°，然后 crop 区域不变，仍为原来的 crop box 坐标决定，这是因为旋转角度 5° 比较小，但是 landmarks 的 target 值按如下修改：
+
+            ```python
+            landmark_ = np.asarray([(rot_mat[0][0]*x+rot_mat[0][1]*y+rot_mat[0][2],
+                 rot_mat[1][0]*x+rot_mat[1][1]*y+rot_mat[1][2]) for (x, y) in landmark])
+            ```
+
+            用数学式表达就是
+
+            $$\mathbf x' = \mathbf M \mathbf x=\begin{bmatrix}m_{00} & m_{01} & m_{02} \\\\ m_{10} & m_{11} & m_{12} \\\\ 0 & 0 & 1\end{bmatrix} \begin{bmatrix}x \\\\ y \\\\ 1\end{bmatrix}$$
+
+            landmark target 值是归一化的，需要先进行逆归一化，得到 landmark 点的齐次坐标 $[x, y, 1]^{\top}$，旋转之后坐标值就是左乘一个旋转矩阵，最后在计算 target 值。旋转之后 crop 图像依然要 resize 到 (12, 12)。
+        
+        landmarks 的训练样本全部为正样本，所以上面过程中得到的 landmarks 的 target 值 <= 0 或者 >=1 的全部过滤掉。
+    
+    - 将上面 PNet 的 pos，neg，part face 数据和 landmark 数据合并到一个文件中，其中 label 值为
+
+        ```sh
+        pos: 1      l,t,r,b 偏差相对值
+        neg: 0
+        part: -1    l,t,r,b 偏差相对值
+        landmark: -2    地标点坐标与 l,t 的 偏差相对值（归一化）
+        ```
+
+2. R-Net。训练好 PNet 之后，使用 PNet 生成 RNet 的训练数据。
     
     使用 first stage 对 WIDER FACE 数据集进行检测，收集正负样本和 part face，对 CelebA 数据集进行检测，收集 landmark face。
+
+    调用 `gen_hard_example.py` 文件中的 `t_net` 函数，
+
+    ```python
+    t_net(..., test_mode='PNet', ...)
+    ```
+
+    见下文 4.2.2 一节。
 
 3. O-Net
 
@@ -142,7 +217,7 @@ $\beta _ i ^ j \in \{0, 1\}$ 是样本类型指示器。
 
 ## 4.1 训练数据
 
-准备训练数据的步骤见项目的说明文档。
+准备训练数据的步骤见项目的说明文档。[数据集 WIDERFACE](http://shuoyang1213.me/WIDERFACE/)。
 
 对于负样本，gt label 为 `img_path 0`
 
@@ -180,7 +255,7 @@ for annotation in annotations:  # 遍历每一个图片的标注信息
             f2.write('../../DATA/12/negative/%s.jpg'%n_idx + ' 0\n')    # 负样本的标注
             cv2.imwrite(save_file, resized_im)  # 保存负样本图片
             ...
-    for box in boxes:
+    for box in boxes:   # 遍历每个 gt box
         x1, y1, x2, y2 = box
         w = x2 - x1 + 1
         h = y2 - y1 + 1
@@ -218,7 +293,7 @@ for annotation in annotations:  # 遍历每一个图片的标注信息
                 cv2.imwrite(...)
 ```
 
-注意上面计算正样本和 part face 的 bbox target: `(x1 - nx1) / float(size)`，即两个坐标之差然后归一化。
+注意上面计算正样本和 part face 的 bbox target: `(x1 - nx1) / float(size)`，即，坐标偏差，然后除以边长。学习模型然后预估偏差与边长的比例，而非坐标偏差的绝对值。由于 P-Net 训练阶段的模型输入 size 为 `12x12`，所以还需要将 crop out 的图像 resize 到 `12x12` 。
 
 准备 P-Net landmark 回归任务的训练数据关键代码
 
@@ -236,6 +311,7 @@ img_path -2 x1 y1 x2 y2 ... x5 y2
 ```python
 # gen_landmark_aug_12.py
 size = 12
+# 遍历数据集中的：图像文件路径，gt box 坐标 x1y1x2y2，(5,2) 的 landmark 坐标
 for (imgPath, bbox, landmarkGt) in data:
     F_imgs = []
     F_landmarks = []
@@ -304,7 +380,23 @@ landmark = tf.reshape(landmark, [batch_size, 10])   # (B, 10)
 
 如果某类型样本缺乏某个数据，那么对应的 target 值 为 0，例如正样本没有 landmark 点坐标，或者 landmark face 样本缺乏 bbox offset（即 `roi`） 数据。
 
-P-Net 网络的结构比较简单，这里不再解释，仅说明计算 loss 的代码，如下
+P-Net 网络的结构比较简单，
+
+```sh
+                                               +----+
+                                           +-->|conv|--> (pred_cls)
+                                           |   +----+
+          +----+   +--+   +----+   +----+  |   +----+
+(input)-->|conv|-->|mp|-->|conv|-->|conv|--+-->|conv|--> (pred_box)
+          +----+   +--+   +----+   +----+  |   +----+
+                                           |   +----+
+                                           +-->|conv|--> (pred_landmark)
+                                               +----+
+# 各 layer 的输出 size
+(12x12)  (10x10)   (5x5)  (3x3)    (1x1)
+```
+
+计算 loss 的代码，如下
 
 ```python
 # mtcnn_model.py/P_Net
@@ -313,11 +405,31 @@ cls_prob = tf.squeeze(conv4_1, [1, 2], name='cls_prob') # (B,1,1,2)->(B,2) 参�
 cls_loss = cls_ohem(cls_prob, label)
 ```
 
-分类任务的在线难例挖掘代码，与上文 2.2 一节中关于 OHEM 的说明一致。
+分类任务的在线难例挖掘代码，与上文 2.2 一节中关于 OHEM 的说明一致。需要注意的是，上文准备训练数据时，标注值为
+
+```sh
+# [path to image][cls_label][bbox_label][landmark_label]
+  
+pos：cls_label=1,bbox_label(calculate),landmark_label=[0,0,0,0,0,0,0,0,0,0].
+
+part：cls_label=-1,bbox_label(calculate),landmark_label=[0,0,0,0,0,0,0,0,0,0].
+  
+landmark：cls_label=-2,bbox_label=[0,0,0,0],landmark_label(calculate).  
+  
+neg：cls_label=0,bbox_label=[0,0,0,0],landmark_label=[0,0,0,0,0,0,0,0,0,0].  
+```
+
+但是在训练 PNet 时，只用到 pos 和 neg，其余两个分类数据均不使用，见下方代码中的 `valid_inds` 。
 
 ```python
 # mtcnn_model.py
+
+num_keep_radio = 0.7 # 在线难例挖掘，仅保留损失 top 70% 大的样本，其他则不参与分类损失计算
 def cls_ohem(cls_prob, label):
+    '''
+    cls_prob: (n, 1, 2)
+    label: (n, 1)
+    '''
     zeros = tf.zeros_like(label)
     # pos->1, neg->0, others(part, landmark)->0
     label_filter_invalid = tf.where(tf.less(label, 0), zeros, label)
@@ -352,6 +464,8 @@ def bbox_ohem(bbox_pred, bbox_target, label):
 
 landmark 回归任务的 OHEM 则类似的，使用了全部的 landmark face，丢弃了正负样本和 part face。
 
+三种损失加权求和，然后再与模型权重的 L2 正则损失相加，得到最终的损失。
+
 
 ### 4.2.2 R-Net
 
@@ -370,7 +484,9 @@ landmark 回归任务的 OHEM 则类似的，使用了全部的 landmark face，
     landmark_pred_test = tf.squeeze(landmark_pred, axis=0)  # (h, w, 10)
     ```
 
-    注意 train 模式下，由于 network input size 为 crop 的 `12x12`，输出 size 刚好为 `1x1`，但是 test 模式下，输入 size 是变化的，是将整个原始图片通过尺度变换生成图片金字塔，所以输入 size 大于等于 `12x12`，那么输出 size 则大于等于 `1x1`。图片金字塔作为输入的代码为，
+    注意 train 模式下，由于 network input size 为 crop 的 `12x12`，输出 size 为 `1x1`，但是 test 模式下，输入 size 是变化的，是将整个原始图片通过尺度变换生成图片金字塔，所以输入 size 大于等于 `12x12`，否则输出 size 为 0。但是 PNet 的整体下采样率为 2。
+    
+    图片金字塔作为输入的代码为，
 
     ```python
     # MtcnnDetector.py/detect_pnet 方法
@@ -380,9 +496,12 @@ landmark 回归任务的 OHEM 则类似的，使用了全部的 landmark face，
     current_height, current_width, _ = im_resized.shape
     all_boxes = list()
 
-    while min(current_height, current_width) > net_size:    # 当前level的输入图片尺寸不小于 12，否则输出 size 为 0
+    while min(current_height, current_width) > net_size:    # 当前level的输入图片尺寸不小于 12
+        # (h, w, 2), (h, w, 4)。分类得分中，分别表示为 neg 和 pos 的预测
+        # 由于 test 阶段，输入 size 可能大于 12，所以 h w 可能大于 1。
         cls_cls_map, reg = self.pnet_detector.predict(im_resized)
         # 根据预测值生成 box（需要先对预测得分进行阈值筛选）
+        # proposal box x1 y1 x2 y2，score，以及 dx1, dy1, dx2, dy2， (n, 9)，n 为预测为正例的数量
         boxes = self.generate_bbox(cls_cls_map[:,:,1], reg, current_scale, self.thresh[0])
         current_scale *= self.scale_factor  # 进一步缩小图片（从而得到图片金字塔）
         im_resized = self.processed_image(im, current_scale)
@@ -395,15 +514,73 @@ landmark 回归任务的 OHEM 则类似的，使用了全部的 landmark face，
     keep = py_nms(all_boxes[:, :5], 0.5, 'Union')
     all_boxes = all_boxes[keep]
     boxes = all_boxes[:, :5]
+    bbw = all_boxes[:, 2] - all_boxes[:, 0] + 1 # proposal box width
+    bbh = all_boxes[:, 3] - all_boxes[:, 1] + 1 # proposal box height
+
+    # refine the boxes, x1' = x1 + dx1 * w
+    boxes_c = np.vstack([all_boxes[:, 0] + all_boxes[:, 5] * bbw,
+                            all_boxes[:, 1] + all_boxes[:, 6] * bbh,
+                            all_boxes[:, 2] + all_boxes[:, 7] * bbw,
+                            all_boxes[:, 3] + all_boxes[:, 8] * bbh,
+                            all_boxes[:, 4]])
+    boxes_c = boxes_c.T
+    # (N, 9), (N, 5), 无landmark 预测故为 None
+    # N 表示各个缩放 level 对应的检测出正样本 ni 之和
+    return boxes, boxes_c, None
     ```
 
-3. 经过 P-Net 预测出来的 box 即， P-Net 认为是正样本，再作为 R-Net 的输入，经过 R-Net 的预测，其他部分可能就预测为负样本，从而达到 refine 的目的。
+    每个图片经过上述过程，得到 `boxes_c` 的列表，`boxes_c` 包含了某个图片经过 PNet 预测的（经过预测得分大于阈值的筛选之后的）所有人脸的预测框 x1y1x2y2 坐标和预测得分。这些预测框将作为 RNet 的训练样本，但是我们还需要处理一下，哪些是正样本哪些是负样本。
+
+3. 经过 P-Net 预测出来的 box 即，对预测得分进行阈值筛选之后的预测框，再作为 R-Net 的训练样本，经过 R-Net 的预测，从而达到 refine 的目的。
 
     P-Net 预测出来的 box，再根据与 gt box 的 IoU 判断出是正样本还是负样本，还是 part face，判断出来之后保存到文件，作为 R-Net 的训练数据。代码见 `gen_hard_example.py/save_hard_example` 方法。
 
-4. 使用 `gen_landmark_aug_24.py` 生成 R-Net 的 landmark 训练数据。
+    ```python
+    # 图像文件路径、PNet 预测、gt box 坐标
+    for im_idx, dets, gts in zip(im_idx_list, det_boxes, gt_boxes_list):
+        gts = np.array(gts, dtype=np.float32).reshape(-1, 4)    # (n, 4) gt box: x1y1x2y2
+        img = cv2.imread(im_idx)
+        dets = convert_to_square(dets)  # 将预测框的短边增大到与长边一样，从而变成方形预测框
+        dets[:, 0:4] = np.round(dets[:, 0:4])
+        neg_num = 0
+        for box in dets:
+            x_left, y_top, x_right, y_bottom, _ = box.astype(int)
+            width = x_right - x_left + 1    # 预测框的 width
+            height = y_bottom - y_top + 1   # 预测框的 height
 
-5. 最后所有的数据一起，作为 R-Net 的训练数据。训练代码与 P-Net 的类似。
+            if width < 20 or x_left < 0 or y_top < 0 or x_right > img.shape[1] - 1 or y_bottom > img.shape[0] - 1:
+                continue    # 预测框 size 至少为 20，且坐标位于图像内（即，完全的人脸展示出来）
+            Iou = IoU(box, gts) # 当前预测框与所有 gt boxes 的 IoU
+            cropped_im = img[y_top:y_bottom+1, x_left:x_right+1, :]
+            resized_im = cv2.resize(cropped_im, (img_size, img_size))   # resize 到 (24, 24)
+            if np.max(Iou) < 0.3 and neg_num < 60:  # 保存为负样本
+                ...
+            else:
+                idx = np.argmax(Iou)
+                assigned_gt = gts[idx]
+                x1, y1, x2, y2 = assigned_gt
+                # 计算坐标偏差的相对值
+                offset_x1 = (x1 - x_left) / float(width)
+                offset_y1 = (y1 - y_top) / float(height)
+                offset_x2 = (x2 - x_right) / float(width)
+                offset_y2 = (y2 - y_bottom) / float(height)
+
+                if np.max(Iou) >= 0.65: # 保存为正样本
+                    pos_file.write(save_file + ' 1 %.2f %.2f %.2f %.2f\n' % (
+                        offset_x1, offset_y1, offset_x2, offset_y2))
+                elif np.max(Iou) >= 0.4:# 保存为 part face
+                    part_file.write(save_file + ' -1 %.2f %.2f %.2f %.2f\n' % (
+                        offset_x1, offset_y1, offset_x2, offset_y2))
+    ```
+    以上，就将 RNet 的训练数据的 pos，neg，part 三种样本均准备好。
+
+4. 使用 `gen_landmark_aug_24.py` 生成 R-Net 的 landmark 训练数据。逻辑与生成 PNet 的 landmark 数据完全一致，只是 crop 图像需要 resize 到 (24, 24) 。
+
+5. 最后所有的数据一起，作为 R-Net 的训练数据，这一步使用 `gen_imglist_rnet.py` 完成。训练 RNet 与训练 P-Net 基本一致。加载数据集时，使用 `read_multi_tfrecords`，这么做是为了将 pos neg part 和 landmark 四种样本分别以不同的 batch size 加载，即加载的一个 batch 中，其中 pos part 和 landmark 各占 1/6，neg 样本占 3/6。
+
+**RNet 网络**
+
+RNet 网络输入 size 为 (24, 24)，经过中间卷积层后输出特征 size 为 (3, 3)，然后 flatten 后再经过一个 fc 层，得到特征维度为 (128, )，然后分别经过 3 个 fc 层，调整输出维度为 2, 4, 10，分别表示 label，box，landmark 预测，计算这三种损失，与训练 PNet 的一样，参考上面的分析。
 
 ### 4.2.3 O-Net
 
@@ -432,8 +609,34 @@ if self.rnet_detector:
 其中 `detect_rnet` 方法所作的事情为：
 
 1. 根据 P-Net 的预测 box，对原始图片 `im` 进行 crop，并调整 crop 后的图片 size 为 `24x24`
+
+    - 将将 P-Net 的预测 box 调成方形（固定住中心，短边增大到长边），记预测 box size 为 (crop_h, crop_w)。然后根据预测 box 从源图像中 crop 放到目标图像，源图像 size 为 (im_h, im_w)，目标图像 size 为 (crop_h, crop_w) ，如果预测 box 完全包含在源图中，那么直接 crop 即可，否则仅 crop 包含在源图中的那一部分，如下图。
+
+    ![](/images/face/mtcnn_3.jpg)
+
+    - crop 之后再 resize 到 (24, 24)，然后归一化到 (-1, 1) 之间。stack 所有这样的 crop 归一化图像，其 shape 为 (n, 24, 24, 3)，其中 n 为此源图中 PNet 预测数量。
+
 2. 使用 R-Net 再进行预测，根据一个预测得分阈值进行筛选，然后使用 NMS 筛选，然后使用 R-Net 的预测 bbox offset 对 P-Net 的预测 box 进行校正
 
+    R-Net 预测包含 (n, 2) 的分类预测、(n, 4) 的 box 坐标偏差相对值预测以及 landmark 坐标偏差相对值预测。
+
+    - 根据分类为 1 的得分，进行阈值筛选，然后再进行 NMS。
+
+        ```python
+        cls_scores, reg, _ = self.rnet_detector.predict(cropped_ims)
+        cls_scores = cls_scores[:, 1]
+        keep_inds = np.where(cls_scores > self.thresh[1])[0]
+        if len(keep_inds) > 0:
+            boxes = dets[keep_inds] # dets 是 PNet 预测结果
+            boxes[:, 4] = cls_scores[keep_inds] # 使用 RNet 预测得分更新 PNet 的预测得分
+            reg = reg[keep_inds]
+        keep = py_nms(boxes, 0.6)   # 使用 RNet 的预测得分，重新做 NMS
+        boxes = boxes[keep]
+        boxes_c = self.calibrate_box(boxes, reg[keep])  # 使用 RNet 预测的坐标偏差相对值更新预测 box
+        ```
+    - 将 `boxes_c` 值保存起来。要得到训练 O-Net 的标注数据，还需要使用 `save_hard_example` 将 RNet 预测结果与 gt boxes 对比，区分出 pos，neg 和 part face 的样本。
+
+3. O-Net 除了网络结构上与 R-Net 有一些不同之外，训练过程是一样的，O-Net 输出分类得分、box 坐标偏差相对值和 landmark 坐标偏差相对值三个预测。
 
 ## 4.3 检测人脸
 
@@ -443,10 +646,29 @@ if self.rnet_detector:
 all_boxes, landmarks = mtcnn_detector.detect_face(test_data)
 ```
 
-与上一节生成 O-Net 的训练数据类似，在此基础上，即 R-Net 对 P-Net 的预测进行 refine 之后，再喂给 O-Net，
+与上一节生成 O-Net 的训练数据类似，在此基础上，即 R-Net 对 P-Net 的预测进行 refine 之后，再经过 O-Net 预测，得到最终的预测 box，`detect_face` 方法且预测人脸 box，没有给出 landmark 预测值，要返回 landmark 预测值，使用 `detect_single_image` 方法。整个预测过程是：
 
-```python
-# MtcnnDetector.py
-def detect_onet(self, im, dets):
-    ... # 代码不再具体分析了，比较简单
-```
+1. 不同 scale level 的金字塔图像，分别经过 PNet 的预测，阈值筛选，NMS，然后所有 level 的预测结果合并之后再 NMS
+
+    PNet 是 FCN 全卷积网络，所以输入 size 不需要与训练阶段的 (12, 12) 相同。
+
+2. PNet 预测结果经过 RNet 预测，对 PNet 的预测结果重新进行 预测得分更新，阈值筛选，NMS
+
+    RNet 不是 FCN，所以根据 PNet 预测结果在源图像上 crop 之后，还要 resize 到 (24, 24)，才能喂给 RNet 。
+
+3. RNet 预测结果再经过 ONet 预测，对 PNet 的预测结果重新进行 预测得分更新，阈值筛选，NMS，过程与 RNet 类似
+
+    ONet 的预测结果中保留了 landmark 的预测，而 PNet 和 RNet 的 landmark 预测都丢弃了。landmark 坐标预测为
+
+    $$r = (x - x_1) / w \Rightarrow x = r * w + x_1$$
+
+    其中 $r$ 是 landmark 坐标偏差相对值，$w$ 是人脸 gt box 宽，$x_1$ 是 gt box 的左侧坐标，$x$ 是地标点的横坐标。
+
+    ```python
+    # width
+    w = boxes[:, 2] - boxes[:, 0] + 1   # boxes 是 RNet 的预测 box 坐标
+    # height
+    h = boxes[:, 3] - boxes[:, 1] + 1
+    landmark[:, 0::2] = (np.tile(w, (5, 1)) * landmark[:, 0::2].T + np.tile(boxes[:, 0], (5, 1)) - 1).T
+    landmark[:, 1::2] = (np.tile(h, (5, 1)) * landmark[:, 1::2].T + np.tile(boxes[:, 1], (5, 1)) - 1).T
+    ```

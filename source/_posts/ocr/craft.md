@@ -1,7 +1,9 @@
 ---
 title: Character Region Awareness for Text Detection 论文解读
 date: 2024-04-08 08:56:55
-tags: ocr
+tags: 
+    - ocr
+    - text detection
 ---
 
 论文：[Character Region Awareness for Text Detection](https://arxiv.org/abs/1904.01941)

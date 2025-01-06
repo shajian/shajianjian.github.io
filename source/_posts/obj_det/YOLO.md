@@ -133,6 +133,7 @@ __分析：__
 1. 特征抽取网络的下采样率为 `32`。如果输入图像的大小为 `(h,w)`，那么输出feature map 大小为 `(h/32,w/32)`，另外两个 scale 的 feature maps 的大小则为 `(h/16,w/16)` 和 `(h/8, w/8)`。
 2. 单个图像的 GT label 大小 为 `90*5`。这表示单个图像中目标数量最大不超过 `90`。
 3. 大量使用 Residual layer。
+4. anchor size 为 `anchors = 10,13,  16,30,  33,23,  30,61,  62,45,  59,119,  116,90,  156,198,  373,326`，先 w 后 h，前 3 个 anchor size 对应 stride=8 的特征平面，中间 3 个 anchor size 对应 stride=16 的特征平面，最后 3 个 anchor size 对应 stride=32 的特征平面，
 
 ![](/images/obj_det/YOLO_3.png)
 

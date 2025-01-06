@@ -137,4 +137,11 @@ This virtual system has a default `root` user whose password is `pytorch`, so le
 input password: pytorch
 (base) root@pytorch:/workspace#
 ```
+
+进入容器
+
+```sh
+docker exec -it [容器id或容器名称] /bin/bash
+```
+
 Enjoy it~
