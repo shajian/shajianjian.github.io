@@ -309,6 +309,8 @@ $$\begin{cases} i = 3 \\ j = 5 \end{cases}, \quad \begin{cases} i = 5 \\ j = 3 \
 码字长度 $n$，消息长度 $k$，最大可纠正错误数 $t$，
 
 1. 接收码字与校验矩阵相乘，得到 syndrome 向量 $S = R \cdot H ^ {\top}$
+
+    $R$ 的 size 为 $1 \times n$，$H$ 的 size 为 $2t \times n$，于是 $S$ 的 size 为 $1 \times 2t$ 。
 2. for $v = t, t - 1, ..., 0$:
 
     计算 $M=\begin{bmatrix} S _ 1 & \cdots & S _ v \\ S _ 2 & \cdots & S _ {v+1} \\ \vdots \\ S _ v & \cdots & S _ {2v}\end{bmatrix}$
@@ -419,14 +421,18 @@ $$d _ {u} = S _ {u+1} + \Lambda _ 1 S _ u + \Lambda _ 2 S _ {u-1} + \ldots + \La
 
 2. $d _ u \ne 0$，寻找前面第 $\rho$ 次迭代，满足 $d _ {\rho} \ne 0$，且 $\rho - l _ {\rho}$ 最大，
 
-    $$\Lambda ^{(u+1)}(x) = \Lambda ^{(u)}(x) + d _ {u - 1} d _ {\rho} ^ {-1} x ^ {u-\rho} \Lambda ^ {(\rho)}(x)$$
+    $$\Lambda ^{(u+1)}(x) = \Lambda ^{(u)}(x) + d _ {u} d _ {\rho} ^ {-1} x ^ {u-\rho} \Lambda ^ {(\rho)}(x)$$
 
-    $$l _ {u+1} = \max (l _ u, l _ {\rho} + u - \rho)$$
+    $$l _ {u+1} = \max (l _ u, l _ {\rho} + u - \rho) \tag{*}$$
 
     $\Lambda ^{(u+1)}(x)$ 阶次为两个单项式中 $x$ 的幂次最大者
+
+    根据测试发现 (*) 式可能存在错误，应该改为 $l _ {u+1} = \max (l _ u, u+1-l_u)$。
 
 迭代步骤 $u$ 范围为 $[0, 2t]$，
 初始条件为 $\Lambda ^ {(0)}(x) = 1$，其阶次为 $l _ 0 = 0$， $d _ 0 = S _ 1$ 。
 
 
 迭代结束后得到 $\Lambda(x)$ 错误多项式，那么要求其根，只要将 $a ^ 0, a ^ 1, a ^ 2, \ldots, a ^ {n-1}$ 代入 $\Lambda (x)$，如果结果为 0，那么就是根。
+
+[代码实现](https://github.com/JianjianSha/bch)

@@ -401,6 +401,14 @@ static int encode_receive_packet_internal(AVCodecContext* avctx, AVPacket* avpkt
         // 执行这个分支
         ret = encode_simple_receive_packet(avctx, avpkt);
     }
+    int ret;
+    if (ffcodec(avctx->codec)->cb_type == FF_CODEC_CB_TYPE_RECEIVE_PACKET) { // false
+        ret = ffcodec(avctx->codec)->cb.receive_packet(avctx, avpkt);
+        ...
+    } else {
+        // 执行这个分支
+        ret = encode_simple_receive_packet(avctx, avpkt);
+    }
 }
 
 static int encode_simple_receive_packet(AVCodecContext *avctx, AVPacket *avpkt) {
