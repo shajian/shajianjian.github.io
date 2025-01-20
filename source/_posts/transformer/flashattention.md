@@ -45,6 +45,7 @@ $$S=QK^{\top} \in \mathbb R^{N \times N}, \quad P = \text{softmax}(S) \in \mathb
 3. 从 HBM 上按块加载 $P,V$，计算 $O=PV$，将 $O$ 写回 HBM
 ---
 
+
 # 2. FlashAttention
 
 本文给出如何使用较少的 HBM 读写计算 attention，并且不将中间值存储到 HBM，得到一个 memory 高效的 attention 算法。
@@ -130,5 +131,17 @@ FLOPs 与标准 attention 相同，额外的内存使用其实就是 $m_i, l_i \
 
 ## 2.2 IO 复杂度
 
-__定理 2__ 记 $N$ 为序列长度，$d$ 为注意力 head 维度，SRAM size 满足 $d \le M \le Nd$。标准 attention（算法 0）需要 $\Theta(Nd+N^2)$ HBM 访问，而 FlashAttention 仅需 $\Theta(N^2d^2M^{-1})$ HBM 访问。
+__定理 2__ 记 $N$ 为序列长度，$d$ 为注意力 head 维度，SRAM size 满足 $d \le M \le Nd$。标准 attention（算法 0）需要 $\Theta(Nd+N^2)$ HBM 访问量，而 FlashAttention 仅需 $\Theta(N^2d^2M^{-1})$ HBM 访问量，注意 IO 复杂度是 IO 读写的数据量而非次数。
+
+对于标准 attention 实现：
+
+1. 从 HBM 上分别加载 $Q$ 和 $K$，IO 复杂度为 $\Theta(Nd)$，计算 $S$ 矩阵并写回 HBM，这一步 IO 复杂度为 $\Theta(N^2)$
+2. 从 HBM 加载 $S$，计算 $P$ 并写回 HBM，这一步 IO 复杂度为 $\Theta(N^2)$
+3. 从 HBM 加载 $P$ 和 $V$，IO 复杂度为 $\Theta(N^2+Nd)$，计算 $O$ 写回 HBM 的 IO 复杂度为 $\Theta(Nd)$
+
+FlashAttention 实现：
+
+1. 从 HBM 上加载 $K,V$ 的 IO 复杂度为 $\Theta(Nd)$
+2. 从 HBM 上加载 $Q,O$ 的 IO 复杂度为 $\Theta(NdT_c)=\Theta(Nd \cdot \frac N {M/4d})=\Theta(M^2d^2M^{-1})$
+3. 将 $O$ 写回 HBM 的 IO 复杂度为 $\Theta(Nd T_c)$
 
